@@ -73,7 +73,7 @@ dsh plugin --profile desktop add dsh-qq-plugin
 dsh-qq-plugin
 ```
 
-需要指定版本就写 `dsh-qq-plugin@1.0.3`。
+需要指定版本就写 `dsh-qq-plugin@1.0.4`。
 </details>
 
 <details>
@@ -91,7 +91,7 @@ C:\path\to\dsh-qq
 
 ```bash
 npm pack
-# → dsh-qq-plugin-1.0.3.tgz
+# → dsh-qq-plugin-1.0.4.tgz
 ```
 
 把那个 `.tgz` 的绝对路径粘进 **添加插件**。
@@ -514,7 +514,7 @@ node scripts/verify-client.mjs   # 客户端注册形状（不是视觉验证）
 node scripts/verify-send-path.mjs  # 发送路径，跑在假 SDK 上
 ```
 
-**782** 项宿主侧检查、**108** 项客户端检查、**60** 项发送路径检查。
+**803** 项宿主侧检查、**108** 项客户端检查、**60** 项发送路径检查。
 
 这三个数字是**从上面那几条命令的实际输出里读出来的，不是手打的**：
 `tools/check-doc-counts.mjs` 拿它们和脚本真正打印的数比，对不上时 CI 会失败并点名是哪个文件。

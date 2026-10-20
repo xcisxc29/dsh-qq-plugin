@@ -1407,7 +1407,7 @@ check('未知帧被记录形态', typeof wrap({ weird: 1 }).frameShape, 'string'
    * ⚠️ 仍然是**离线**的：QQBot 的连接与发送都被换成了假的，没有任何网络。
    */
   {
-    const { mkdtempSync, rmSync, readFileSync } = await import('node:fs')
+    const { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const { QQBot } = await import('@tencent-connect/qqbot-nodejs')
@@ -1523,6 +1523,222 @@ check('未知帧被记录形态', typeof wrap({ weird: 1 }).frameShape, 'string'
       check('★ 提示词交给的是**新**会话（用户刚发的内容没有丢）', prompts.length === 1 && prompts[0].sessionId === rebound.sessionId, true)
       check('★ 提交过去的正文就是用户那句话', String(prompts[0]?.content?.[0]?.text).includes('你好'), true)
       check('★ 新会话确实被交给宿主创建过（换绑不是只在本地改了个 id）', sessions.length === 1 && sessions[0].sessionId === rebound.sessionId, true)
+
+      /*
+       * 收尾：把这一节的 typing 定时器停掉。
+       *
+       * `#startTyping` 每 5 秒发一次 `sendTyping`（走 SDK 的 HTTP 层、即 `globalThis.fetch`），
+       * 而下面的下载重试用例是**按 `fetch` 被调了几次**断言的。这里不停的话，
+       * 一跳 typing 就会混进那个计数器（实测：`持续失败试满 4 次后放弃` 得到 5）。
+       */
+      await runtime.halt()
+
+      /*
+       * ---- 9. ⭐ 每条消息都留下一个空白会话 ----------------------------------
+       *
+       * 根因（微信插件已用同一份修法发布 0.44.0）：DSH 从 `0.2.0-rc.2` 到 `0.2.1-rc.2`，
+       * `sessionController.create` 不再是"创建或采纳"——它**只复用还空着**的会话
+       * （没有 `turn/start` 的那些），已经跑过一轮的会话不再被采纳，而是**另铸一个新 id** 返回。
+       * 而本插件从前在**每条消息之前**都 create 一下"确保会话活着"、再丢掉返回值、继续用原 id
+       * `prompt`：于是聊天看起来正常（`prompt` 自己会 resume），**每条消息却留下一个空白会话**。
+       *
+       * 这里用**真 `QqRuntime` + 一个会把记录写到磁盘的假宿主**跑完整条入站链，
+       * 只数 `create` 被调了几次、`prompt` 落到了哪条会话上、工作区被解析了几遍。
+       *
+       * ⚠️ 假宿主的 `create` **不写**记录，记录由 `prompt` 写：真 DSH 是在**第一个回合**
+       * 写下会话记录的（那正是路由里那条 2 分钟宽限期存在的原因）。不这么钉的话，
+       * "第二条消息不再 create"测到的就不是守卫，而是假的存储行为。
+       *
+       * ⚠️ 仍然**离线**：QQBot 的连接、发送都被原型上的替身截住，没有任何网络。
+       */
+      {
+        const si = await import('../lib/session-index.js')
+        const home9 = mkdtempSync(join(tmpdir(), 'dsh-qq-blank-session-'))
+        const workspace9 = join(home9, 'dsh_qq')
+        const indexDir9 = join(home9, 'storages', 'session_projcache', 'sessions')
+        const indexFile9 = (id) => join(indexDir9, `${id}.json`)
+
+        const writeRecord9 = (id, cwd, title = '') => {
+          mkdirSync(indexDir9, { recursive: true })
+          writeFileSync(
+            indexFile9(id),
+            JSON.stringify({
+              record: {
+                identity: { cwd, createdAt: Date.now() },
+                rows: title === '' ? {} : { title: { val: title } },
+              },
+            }),
+            'utf8',
+          )
+        }
+        /** 第一个回合才写记录：已经有记录就不覆盖（否则会把外部会话的 cwd 改掉）。 */
+        const recordOnFirstTurn9 = (id, cwd) => {
+          if (!existsSync(indexFile9(id))) writeRecord9(id, cwd)
+        }
+        /** 让一条会话在磁盘上完整存在（记录 + 会话目录）：`/switch` 要能列出它。 */
+        const seedSession9 = (id, cwd, title) => {
+          writeRecord9(id, cwd, title)
+          mkdirSync(join(home9, 'sessions', si.encodeWorkspaceDir(cwd), id), { recursive: true })
+        }
+
+        const newBag9 = () => ({ created: [], prompted: [], workspace: [] })
+        const credentials9 = {
+          available: true,
+          save: async () => ({}),
+          load: async (appId) => ({ appId, appSecret: 'secret' }),
+          remove: async () => {},
+          describe: async () => ({ configured: true }),
+        }
+        const uniqueSessions9 = (bag) =>
+          JSON.stringify([...new Set(bag.prompted.map((request) => request.sessionId))])
+        const bindingOnDisk9 = () =>
+          JSON.parse(readFileSync(join(home9, 'state.json'), 'utf8')).bindings['111:peer']
+
+        /**
+         * 挂载一台真运行时（同一个 home 再挂一次 = 宿主重启）。
+         *
+         * 每次都用新的 `bag` 记账，这样"重启后 create 次数为 0"是**这一次挂载**的事实。
+         */
+        const mount9 = async (bag) => {
+          botListeners.clear()
+          const knownCwd = new Map()
+          const controller9 = {
+            create: async (request) => {
+              bag.created.push(request)
+              knownCwd.set(request.sessionId, workspace9)
+            },
+            prompt: async (request) => {
+              bag.prompted.push(request)
+              recordOnFirstTurn9(request.sessionId, knownCwd.get(request.sessionId) ?? workspace9)
+            },
+            cancel: async () => {},
+            rename: async () => {},
+          }
+          const registry9 = {
+            resolveByPath: async (path) => {
+              bag.workspace.push(['resolveByPath', path])
+              return { id: `ws-${path}`, title: '', setTitle: async () => {} }
+            },
+            create: async (path) => {
+              bag.workspace.push(['create', path])
+              return { id: `ws-${path}`, title: '', setTitle: async () => {} }
+            },
+          }
+          const runtime9 = new QqRuntime(
+            {
+              sessionController: controller9,
+              get: (name) => (name === 'workspaceRegistry' ? registry9 : undefined),
+            },
+            {
+              home: home9,
+              stateFile: join(home9, 'state.json'),
+              workspace: workspace9,
+              credentials: credentials9,
+            },
+          )
+          await runtime9.store.update((next) => {
+            next.accounts['111'] = { userOpenid: 'peer', enabled: true, boundAt: Date.now() }
+          })
+          await runtime9.start('111')
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          const listeners = botListeners.get('message') ?? []
+          return {
+            runtime: runtime9,
+            send: async (messageId, text) => {
+              for (const listener of listeners) {
+                await listener({}, { kind: 'c2c', senderId: 'peer', messageId, content: text })
+              }
+              await new Promise((resolve) => setTimeout(resolve, 60))
+            },
+          }
+        }
+
+        try {
+          // ---- A. 两条消息只 create 一次，两条 prompt 指向同一条会话 ----------
+          const bagA = newBag9()
+          const mountA = await mount9(bagA)
+          await mountA.send('m-1', '你好')
+          const firstSession = bagA.prompted.at(-1)?.sessionId
+          await mountA.send('m-2', '再说一句')
+          check('★ 两条消息只 create 一次（第二条不再为"确保会话活着"去 create）', bagA.created.length, 1)
+          check('★ 被 create 的就是被 prompt 的那条会话', bagA.created[0]?.sessionId, firstSession)
+          check('★ 两条消息都落在同一条会话上（消息没有分叉）', uniqueSessions9(bagA), JSON.stringify([firstSession]))
+          check(
+            '★ 工作区只解析一次（不是每条消息重新解析一遍）',
+            JSON.stringify(bagA.workspace),
+            JSON.stringify([['resolveByPath', workspace9]]),
+          )
+          check(
+            '★ create 时指名的是工作区 id（会话归进文件夹，不是「未分组」）',
+            bagA.created[0]?.workspaceId,
+            `ws-${workspace9}`,
+          )
+          check('★ 落盘的绑定指着那条唯一的会话（没有另绑一条空白会话）', bindingOnDisk9()?.sessionId, firstSession)
+          await mountA.runtime.halt()
+
+          // ---- B. 重启后不 create：读回绑定后直接 prompt 原会话 ---------------
+          const bagB = newBag9()
+          const mountB = await mount9(bagB)
+          await mountB.send('m-3', '重启之后还在吗')
+          check('★ 重启后读回绑定直接 prompt，create 次数为 0', bagB.created.length, 0)
+          check('★ 重启后提示词仍然落在重启前那条会话上', uniqueSessions9(bagB), JSON.stringify([firstSession]))
+          check(
+            '★ 重启后不为既有会话重新解析工作区（工作区不会漂移）',
+            JSON.stringify(bagB.workspace),
+            '[]',
+          )
+          check('★ 重启后绑定没有被换掉', bindingOnDisk9()?.sessionId, firstSession)
+          await mountB.runtime.halt()
+
+          // ---- C. 记录被删 → 仍按原 id 重建，只 create 一次，此后不再 create ---
+          rmSync(indexFile9(firstSession), { force: true })
+          rmSync(join(home9, 'sessions', si.encodeWorkspaceDir(workspace9), firstSession), {
+            recursive: true,
+            force: true,
+          })
+          const bagC = newBag9()
+          const mountC = await mount9(bagC)
+          await mountC.send('m-4', '记录没了以后')
+          check('★ 没有记录的会话仍会重建（旧 id 没有记录，才走 create）', bagC.created.length, 1)
+          check('★ 重建用的是同一个 id（不会改名，也不会多出一条空白会话）', bagC.created[0]?.sessionId, firstSession)
+          await mountC.send('m-5', '再来一条')
+          await mountC.send('m-6', '还有一条')
+          check('★ 重建之后不再 create（记录又有了，守卫生效）', bagC.created.length, 1)
+          check('★ 三条 prompt 全部落在同一个会话上', uniqueSessions9(bagC), JSON.stringify([firstSession]))
+          check(
+            '★ 重建那一刻只解析一次工作区',
+            JSON.stringify(bagC.workspace),
+            JSON.stringify([['resolveByPath', workspace9]]),
+          )
+          await mountC.runtime.halt()
+
+          // ---- D. 切到外部会话：既有会话从不交给 create ----------------------
+          const EXTERNAL = 'session-abcdef12-abcdef12-3456-7890'
+          seedSession9(EXTERNAL, join(home9, '外部项目'), '外部会话')
+          const bagD = newBag9()
+          const mountD = await mount9(bagD)
+          await mountD.send('m-7', '/switch 外部会话')
+          check('★ /switch 到既有会话不 create（既有会话从不交给 create）', bagD.created.length, 0)
+          check(
+            '★ /switch 确实切过去了（回话点名了那条会话）',
+            sent.some(({ text }) => String(text).includes('已切换到「外部会话」')),
+            true,
+          )
+          await mountD.send('m-8', '外部会话里说一句')
+          check('★ 切过去之后发消息也不 create', bagD.created.length, 0)
+          check('★ 提示词落在外部会话上', uniqueSessions9(bagD), JSON.stringify([EXTERNAL]))
+          check('★ 落盘的绑定指着外部会话', bindingOnDisk9()?.sessionId, EXTERNAL)
+          check(
+            '★ 没有为外部会话解析本频道的工作区（那条分支已经没有理由存在）',
+            JSON.stringify(bagD.workspace),
+            '[]',
+          )
+          await mountD.runtime.halt()
+        } finally {
+          rmSync(home9, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+        }
+      }
+
     } finally {
       QQBot.prototype.start = realStart
       QQBot.prototype.sendText = realSendText
