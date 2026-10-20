@@ -1,6 +1,6 @@
 {
   "name": "dsh-qq-plugin",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "type": "module",
   "description": "QQ channel for DeepSeek Harness: drive the agent on your computer from your phone in QQ. Runs on Tencent's official QQ bot platform, so no public IP and no reverse proxy are needed.",
   "keywords": [

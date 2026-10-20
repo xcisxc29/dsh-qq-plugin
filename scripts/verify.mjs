@@ -1801,29 +1801,47 @@ check('未知帧被记录形态', typeof wrap({ weird: 1 }).frameShape, 'string'
     control: async () => ({ ok: true, detail: 'x', sessions: [], otherWorkspaces: 0, otherNames: [] }),
     log: () => {},
   })
+  // 规则可能住在主描述里，也可能住在参数说明里。断言查**整个工具定义**
+  // （description + 序列化后的 parameters），否则规则搬一次家这里就会误报红；
+  // 更糟的是规则搬走了、断言还在查一个空位置，等于没人盯着。
+  const full = def.description + '\n' + JSON.stringify(def.parameters)
   check('★ 工具名带 qq_ 前缀（避免与微信的 session_control 重名）', def.name, 'qq_session_control')
   check('action 枚举完整', JSON.stringify(def.parameters.properties.action.enum), JSON.stringify(['list', 'switch', 'new', 'current', 'cancel', 'model']))
   check('action 必填', JSON.stringify(def.parameters.required), JSON.stringify(['action']))
   check('output 声明 detail/ok', JSON.stringify(def.output.schema.required), JSON.stringify(['detail', 'ok']))
   check('output.schema 含 otherWorkspaces', def.output.schema.properties.otherWorkspaces.type, 'number')
   check('render 返回数组', Array.isArray(def.output.render({ action: 'list' })), true)
-  check('★ 确认策略在描述里（开）', def.description.includes('IMPORTANT'), true)
+  check('★ S16 确认策略在描述里（开）', def.description.includes('IMPORTANT'), true)
   const off = st.sessionToolDescription(false)
-  check('★ 确认策略在描述里（关）', !off.includes('IMPORTANT') && off.includes('confirmation off'), true)
-  check('描述要求不要复述结果', def.description.includes('do not repeat that outcome'), true)
-  // 模型：列清单与切换同用一个 action，靠有没有 target 区分；只读的那半边不必先确认。
-  check('★ target 描述说明 model 可以省略（省略=列出）', def.parameters.properties.target.description.includes('omit it to list the models'), true)
-  check('★ 只读的模型列表被列进"不必先确认"的例外', def.description.includes('action "model" with'), true)
-  check('★ 描述说明切换对下一步生效、不是对正在跑的那一步', def.description.includes('applies from the next step'), true)
+  const offFull = off + '\n' + JSON.stringify(def.parameters)
+  check('★ S17 确认策略在描述里（关）', !off.includes('IMPORTANT') && offFull.includes('confirmation off'), true)
+  // S2：频道自己宣布（成功与失败都算），agent 不要再复述一遍。
+  check('★ S2 频道宣布（含失败）且不要复述', /Switching\/creating is announced, failures included/.test(full) && /do not repeat that outcome either way/.test(full), true)
+  // S1：任何措辞都要调工具，不能只在回复里描述。
+  check('★ S1 任何措辞都调工具、不能只描述', /Call it for any wording of see\/switch\/create\/identify\/stop/.test(full) && /never just describe/i.test(full), true)
+  check('★ S3 绝不能说切换/新建成功了', /never claim a switch\/new succeeded/.test(full), true)
+  check('★ S4 ok 为 false 就什么都不说', /read `ok`, and say nothing if false/.test(full), true)
+  // S20：switch/new/model 各自怎么给 target；model 省略=列出。
+  check('★ S20 target 语义（switch 编号/标题、new 标题、model 名字/id/编号、省略=列出）', /switch number\/title; new optional title; model name\/id\/number \(omit to list\)/.test(full), true)
+  // S16：确认开时必须先说明并等同意；只有 list 与无 target/level 的 model 是例外。
+  check('★ S16 只读操作可直接调（不必先确认）', /before acting, state the plan and wait for agreement/.test(full) && /action "list" and action "model" with neither target nor level are read-only/.test(full) && /call those at once/.test(full), true)
+  check('★ S15 切换对下一步生效、中途改模型可行、不能说已影响正在跑的工作', /applies from the next step/.test(full) && /mid-conversation model changes work/.test(full) && /never claim it hit running work/.test(full), true)
   // 推理等级：与 `/model 等级` 同一件事，所以走同一个 action，只多一个参数。
   check('★ 工具多了 level 参数', def.parameters.properties.level.type, 'string')
-  check('★ level 描述说明要与清单印的名字一致', def.parameters.properties.level.description.includes('as the model list prints it'), true)
-  check('★ level 描述说明"有 target 就一起改、没有就只改等级"', def.parameters.properties.level.description.includes('the model and the level change together'), true)
-  check('★ 描述里说清了模型清单带推理等级', def.description.includes('Each model is listed with its reasoning levels'), true)
+  check('★ S12 level 拼写与清单印的名字一致', /as the model list prints it/.test(full), true)
+  check('★ S13 level 组合：有 target 一起改、没有只改等级、省略=不改', /the model and the level change together/.test(full) && /only the level in use changes/.test(full) && /\(omit: unchanged\)/.test(full), true)
+  check('★ S11 模型清单带推理等级', /each with its reasoning levels/.test(full), true)
   check('level 不是必填', JSON.stringify(def.parameters.required), JSON.stringify(['action']))
-  // 清单分两层：agent 必须说得出它刚展示的是"本工作区的会话"还是"工作区本身"。
-  check('★ 描述说明清单分两层（list 是会话，all 是会话夹）', def.description.includes('The list has two levels'), true)
-  check('★ 描述说明两层都每屏十条、编号跨屏连续', def.description.includes('numbering that runs on across pages'), true)
+  // S5：清单分两层，agent 必须说得出它刚展示的是"本工作区的会话"还是"工作区本身"。
+  check('★ S5 清单分两层（list 是会话，all 是工作区+会话数）', /Lists have two levels/.test(full) && /target "all" is the machine's workspaces with counts/.test(full), true)
+  check('★ S6 两层都每屏十条、编号跨屏连续', /numbering that runs on across pages/.test(full), true)
+  check('★ S7 翻页由用户回复完成、agent 不代翻', /user pages by replying/.test(full) && /do not page for them/.test(full), true)
+  check('★ S8 任何工作区的会话都能切', /Any workspace's conversation can be switched to/.test(full), true)
+  check('★ S9 model 无 target=列出本会话模型', /without a target lists this conversation's models/.test(full), true)
+  check('★ S10 model 有 target=切换模型', /with a target it switches models/.test(full), true)
+  check('★ S14 频道自己发模型清单、不要复述', /The channel sends model lists; do not repeat them/.test(full), true)
+  check('★ S18 current=报告当前在用的会话', /current reports which is in use/.test(full), true)
+  check('★ S19 cancel=中断正在跑的工作', /cancel interrupts running work/.test(full), true)
 
   check('新建确认文案（有标题）', st.switchConfirmation('new', '测试会话'), '已新建对话「测试会话」，从现在起你的消息发到这里。')
   check('新建确认文案（无标题）', st.switchConfirmation('new', ''), '已新建对话，从现在起你的消息发到这里。')
@@ -1876,17 +1894,28 @@ check('未知帧被记录形态', typeof wrap({ weird: 1 }).frameShape, 'string'
   check('目录名里的点不误判', st.mediaKindFor('/a.b/report'), 'file')
 
   const sendDef = st.sendToQqToolDefinition({ deliver: async () => 'ok', log: () => {} })
+  const sendFull = sendDef.description + '\n' + JSON.stringify(sendDef.parameters)
   check('send_to_qq 名字', sendDef.name, 'send_to_qq')
   check('send_to_qq 只要求 path', JSON.stringify(sendDef.parameters.required), JSON.stringify(['path']))
-  check('send_to_qq 说明绝对路径', sendDef.description.includes('must be absolute'), true)
+  check('★ F1 只发给提问的那个对话', /conversation that asked/.test(sendFull), true)
+  check('★ F2 绝对路径、可指向本机任意位置', /must be absolute, anywhere on this machine/.test(sendFull), true)
+  check('★ F3 不需要先复制', /no copy/.test(sendFull), true)
+  check('★ F4 用户要看/收 文件、图片、截图、图表、视频时使用', /asked for a file, image, screenshot, chart, or video/.test(sendFull), true)
+  check('★ F5 caption 可选、发在文件之前', /Optional caption precedes the file/.test(sendFull), true)
+  check('★ F6 媒体映射：图片变照片、视频变片段', /Images arrive as photos, videos as clips/.test(sendFull), true)
   check('send_to_qq output 契约', JSON.stringify(sendDef.output.schema.required), JSON.stringify(['detail']))
 
   const notifyDef = st.notifyQqToolDefinition({ deliver: async () => 'ok', log: () => {} })
+  const notifyFull = notifyDef.description + '\n' + JSON.stringify(notifyDef.parameters)
   check('notify_qq 名字', notifyDef.name, 'notify_qq')
   check('notify_qq 只要求 text', JSON.stringify(notifyDef.parameters.required), JSON.stringify(['text']))
   check('★ notify_qq 不接受目标参数（agent 无法瞄错）', Object.keys(notifyDef.parameters.properties).join(','), 'text,path')
-  check('notify_qq 说明任意会话可用', notifyDef.description.includes('works from any session'), true)
-  check('notify_qq 说明无法选择别的对话', notifyDef.description.includes('no way to choose another'), true)
+  check('★ N1 消息 + 可选文件', /Push a message and optional file/.test(notifyFull), true)
+  check('★ N2 任意会话可用（含未绑定）', /Works from any session, even unbound/.test(notifyFull), true)
+  check('★ N3 一定送到当前对话、无法选另一个', /no way to choose another/.test(notifyFull) && /reaches the current conversation/.test(notifyFull), true)
+  check('★ N4 用途：报告完成任务 / 发用户要的文件', /report a finished task or send a requested file/.test(notifyFull), true)
+  check('★ N5 文字保持简短（手机阅读）', /Keep text short for a phone/.test(notifyFull), true)
+  check('★ N6 文件必须是绝对路径', /\(absolute path\)/.test(notifyFull), true)
   check('notify_qq output 契约', JSON.stringify(notifyDef.output.schema.required), JSON.stringify(['detail']))
 
   // 执行路径：deliver 抛错时工具必须把错误传出去（而不是静默返回空 detail）

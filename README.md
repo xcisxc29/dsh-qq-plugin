@@ -84,7 +84,7 @@ dsh plugin --profile desktop add dsh-qq-plugin
 dsh-qq-plugin
 ```
 
-Add a version if you need one: `dsh-qq-plugin@1.0.4`.
+Add a version if you need one: `dsh-qq-plugin@1.0.5`.
 </details>
 
 <details>
@@ -103,7 +103,7 @@ declares is `dsh-qq-plugin`.
 
 ```bash
 npm pack
-# → dsh-qq-plugin-1.0.4.tgz
+# → dsh-qq-plugin-1.0.5.tgz
 ```
 
 Paste the absolute path to that `.tgz` into **添加插件**.
@@ -583,7 +583,7 @@ node scripts/verify-client.mjs   # client registration shape (not a visual check
 node scripts/verify-send-path.mjs  # the send path, against a fake SDK
 ```
 
-**803** host checks, **108** client checks, **60** send-path checks.
+**822** host checks, **108** client checks, **60** send-path checks.
 
 Those three numbers are **read out of the runs above, not typed by hand**: `tools/check-doc-counts.mjs`
 compares them against what the scripts actually print, and the CI job fails naming the file if any of
